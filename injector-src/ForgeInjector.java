@@ -9,6 +9,112 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
 
+// Сначала объявляем вспомогательные классы
+class MixinHookRegistry {
+    private static Map<String, List<MixinHook>> injectHooks = new HashMap<>();
+    private static Map<String, MixinHook> overwriteHooks = new HashMap<>();
+    private static Map<String, MethodInterceptor> interceptors = new HashMap<>();
+    
+    public static void registerInjectHook(String methodKey, Object mixinInstance, Method mixinMethod) {
+        injectHooks.computeIfAbsent(methodKey, k -> new ArrayList<>())
+                   .add(new MixinHook(mixinInstance, mixinMethod));
+    }
+    
+    public static void registerOverwriteHook(String methodKey, Object mixinInstance, Method mixinMethod) {
+        overwriteHooks.put(methodKey, new MixinHook(mixinInstance, mixinMethod));
+    }
+    
+    public static void registerInterceptor(String methodKey, MethodInterceptor interceptor) {
+        interceptors.put(methodKey, interceptor);
+    }
+    
+    public static Map<String, MethodInterceptor> getAllInterceptors() {
+        return new HashMap<>(interceptors);
+    }
+    
+    public static List<MixinHook> getInjectHooks(String methodKey) {
+        return injectHooks.getOrDefault(methodKey, new ArrayList<>());
+    }
+    
+    public static MixinHook getOverwriteHook(String methodKey) {
+        return overwriteHooks.get(methodKey);
+    }
+    
+    public static MethodInterceptor getInterceptor(String methodKey) {
+        return interceptors.get(methodKey);
+    }
+    
+    static class MixinHook {
+        Object instance;
+        Method method;
+        
+        MixinHook(Object instance, Method method) {
+            this.instance = instance;
+            this.method = method;
+        }
+        
+        public Object invoke(Object... args) throws Exception {
+            return method.invoke(instance, args);
+        }
+    }
+    
+    static class MethodInterceptor {
+        Object mixinInstance;
+        Method mixinMethod;
+        Method originalMethod;
+        
+        MethodInterceptor(Object mixinInstance, Method mixinMethod, Method originalMethod) {
+            this.mixinInstance = mixinInstance;
+            this.mixinMethod = mixinMethod;
+            this.originalMethod = originalMethod;
+        }
+        
+        public Object intercept(Object target, Object... args) throws Exception {
+            return mixinMethod.invoke(mixinInstance, args);
+        }
+        
+        public Method getMixinMethod() { return mixinMethod; }
+        public Method getOriginalMethod() { return originalMethod; }
+        public Object getMixinInstance() { return mixinInstance; }
+    }
+}
+
+class RuntimeMethodInterceptor {
+    private static Map<String, MixinHookRegistry.MethodInterceptor> hooks = new HashMap<>();
+    private static boolean initialized = false;
+    
+    public static void initialize(PrintWriter writer) {
+        if (initialized) return;
+        
+        writer.println("Initializing RuntimeMethodInterceptor...");
+        initialized = true;
+    }
+    
+    public static void registerHook(String methodKey, MixinHookRegistry.MethodInterceptor interceptor) {
+        hooks.put(methodKey, interceptor);
+    }
+    
+    public static Object intercept(String className, String methodName, Object target, Object... args) {
+        String key = className + "." + methodName;
+        MixinHookRegistry.MethodInterceptor interceptor = hooks.get(key);
+        
+        if (interceptor != null) {
+            try {
+                return interceptor.intercept(target, args);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        
+        return null;
+    }
+    
+    public static boolean hasHook(String className, String methodName) {
+        return hooks.containsKey(className + "." + methodName);
+    }
+}
+
+// Основной класс
 public class ForgeInjector extends Thread {
     private byte[][] classes;
     private static volatile boolean injected = false;
@@ -379,7 +485,6 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // ИСПРАВЛЕНО: используем правильный путь к классу
     private void installDirectMethodHook(PrintWriter writer, Class<?> targetClass, String methodName, Object mixinInstance, Method mixinMethod) {
         try {
             writer.println("              Installing direct method hook...");
@@ -397,7 +502,6 @@ public class ForgeInjector extends Thread {
             if (targetMethod != null) {
                 writer.println("                Found target method: " + targetMethod);
                 
-                // ИСПРАВЛЕНО: используем полный путь к классу
                 MixinHookRegistry.MethodInterceptor interceptor = new MixinHookRegistry.MethodInterceptor(mixinInstance, mixinMethod, targetMethod);
                 
                 String interceptorKey = targetClass.getName() + "." + methodName;
@@ -502,109 +606,5 @@ public class ForgeInjector extends Thread {
     
     public static Object getMixinInstance(String className) {
         return mixinInstances.get(className);
-    }
-}
-
-class MixinHookRegistry {
-    private static Map<String, List<MixinHook>> injectHooks = new HashMap<>();
-    private static Map<String, MixinHook> overwriteHooks = new HashMap<>();
-    private static Map<String, MethodInterceptor> interceptors = new HashMap<>();
-    
-    public static void registerInjectHook(String methodKey, Object mixinInstance, Method mixinMethod) {
-        injectHooks.computeIfAbsent(methodKey, k -> new ArrayList<>())
-                   .add(new MixinHook(mixinInstance, mixinMethod));
-    }
-    
-    public static void registerOverwriteHook(String methodKey, Object mixinInstance, Method mixinMethod) {
-        overwriteHooks.put(methodKey, new MixinHook(mixinInstance, mixinMethod));
-    }
-    
-    public static void registerInterceptor(String methodKey, MethodInterceptor interceptor) {
-        interceptors.put(methodKey, interceptor);
-    }
-    
-    public static Map<String, MethodInterceptor> getAllInterceptors() {
-        return new HashMap<>(interceptors);
-    }
-    
-    public static List<MixinHook> getInjectHooks(String methodKey) {
-        return injectHooks.getOrDefault(methodKey, new ArrayList<>());
-    }
-    
-    public static MixinHook getOverwriteHook(String methodKey) {
-        return overwriteHooks.get(methodKey);
-    }
-    
-    public static MethodInterceptor getInterceptor(String methodKey) {
-        return interceptors.get(methodKey);
-    }
-    
-    static class MixinHook {
-        Object instance;
-        Method method;
-        
-        MixinHook(Object instance, Method method) {
-            this.instance = instance;
-            this.method = method;
-        }
-        
-        public Object invoke(Object... args) throws Exception {
-            return method.invoke(instance, args);
-        }
-    }
-    
-    static class MethodInterceptor {
-        Object mixinInstance;
-        Method mixinMethod;
-        Method originalMethod;
-        
-        MethodInterceptor(Object mixinInstance, Method mixinMethod, Method originalMethod) {
-            this.mixinInstance = mixinInstance;
-            this.mixinMethod = mixinMethod;
-            this.originalMethod = originalMethod;
-        }
-        
-        public Object intercept(Object target, Object... args) throws Exception {
-            return mixinMethod.invoke(mixinInstance, args);
-        }
-        
-        public Method getMixinMethod() { return mixinMethod; }
-        public Method getOriginalMethod() { return originalMethod; }
-        public Object getMixinInstance() { return mixinInstance; }
-    }
-}
-
-class RuntimeMethodInterceptor {
-    private static Map<String, MixinHookRegistry.MethodInterceptor> hooks = new HashMap<>();
-    private static boolean initialized = false;
-    
-    public static void initialize(PrintWriter writer) {
-        if (initialized) return;
-        
-        writer.println("Initializing RuntimeMethodInterceptor...");
-        initialized = true;
-    }
-    
-    public static void registerHook(String methodKey, MixinHookRegistry.MethodInterceptor interceptor) {
-        hooks.put(methodKey, interceptor);
-    }
-    
-    public static Object intercept(String className, String methodName, Object target, Object... args) {
-        String key = className + "." + methodName;
-        MixinHookRegistry.MethodInterceptor interceptor = hooks.get(key);
-        
-        if (interceptor != null) {
-            try {
-                return interceptor.intercept(target, args);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-        
-        return null;
-    }
-    
-    public static boolean hasHook(String className, String methodName) {
-        return hooks.containsKey(className + "." + methodName);
     }
 }
