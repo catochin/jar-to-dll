@@ -8,8 +8,15 @@ jobs:
       uses: actions/checkout@v4
     - name: Install MinGW x86-64 compiler
       run: sudo apt install -y g++-mingw-w64-x86-64
-    - name: Install JDK
-      run: sudo apt install -y openjdk-8-jdk
+    - name: Setup Java 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    - name: Verify Java version
+      run: |
+        java -version
+        javac -version
     - name: Check if input.jar exists
       id: check_input_jar
       uses: andstor/file-existence-action@v2
