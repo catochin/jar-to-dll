@@ -2,16 +2,16 @@ all: build
 
 build-injector:
 	@echo "Building injector class"
-	@javac -source 1.8 -target 1.8 injector-src/*.java
+	@javac --release 17 injector-src/*.java
 build-header-converter:
 	@echo "Building class to header converter"
-	@javac -source 1.8 -target 1.8 header-converter-src/HeaderConverter.java
+	@javac --release 17 header-converter-src/HeaderConverter.java
 convert-injector: build-injector build-header-converter
 	@echo "Converting injector class to .h"
-	@java -cp header-converter-src HeaderConverter injector injector-src/*.class native-src/classes/injector.h
+	@java --add-opens java.base/java.lang=ALL-UNNAMED -cp header-converter-src HeaderConverter injector injector-src/*.class native-src/classes/injector.h
 convert-jar: build-header-converter
 	@echo "Converting input jar to .h"
-	@java -cp header-converter-src HeaderConverter input-jar input.jar native-src/classes/jar.h
+	@java --add-opens java.base/java.lang=ALL-UNNAMED -cp header-converter-src HeaderConverter input-jar input.jar native-src/classes/jar.h
 
 native_files := main.cpp injector.cpp utils.cpp
 

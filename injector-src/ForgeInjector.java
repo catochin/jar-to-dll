@@ -1,5 +1,6 @@
 import java.io.File;
 import java.io.PrintWriter;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.ProtectionDomain;
@@ -16,7 +17,7 @@ public class ForgeInjector extends Thread {
         new Thread(new ForgeInjector(classes)).start();
     }
 
-    private static Class tryGetClass(PrintWriter writer, ClassLoader cl, String... names) throws ClassNotFoundException {
+    private static Class<?> tryGetClass(PrintWriter writer, ClassLoader cl, String... names) throws ClassNotFoundException {
         ClassNotFoundException lastException = null;
         for (String name : names) {
             try {
@@ -54,9 +55,9 @@ public class ForgeInjector extends Thread {
                 this.setContextClassLoader(cl);
                 
                 // Fabric использует ModInitializer интерфейс вместо аннотаций
-                Class modInitializerInterface = null;
-                Class clientModInitializerInterface = null;
-                Class dedicatedServerModInitializerInterface = null;
+                Class<?> modInitializerInterface = null;
+                Class<?> clientModInitializerInterface = null;
+                Class<?> dedicatedServerModInitializerInterface = null;
                 
                 try {
                     modInitializerInterface = tryGetClass(writer, cl, "net.fabricmc.api.ModInitializer");
@@ -93,9 +94,9 @@ public class ForgeInjector extends Thread {
                         throw new Exception("getClass() is null");
                     }
                     try {
-                        Class tClass = null;
+                        Class<?> tClass = null;
                         try {
-                            tClass = (Class)loadMethod.invoke(cl, null, classData, 0, classData.length, cl.getClass().getProtectionDomain());
+                            tClass = (Class<?>)loadMethod.invoke(cl, null, classData, 0, classData.length, cl.getClass().getProtectionDomain());
                         } catch (Throwable e) {
                             if (!(e instanceof LinkageError)) {
                                 throw e;
@@ -141,14 +142,17 @@ public class ForgeInjector extends Thread {
                 writer.flush();
                 
                 for (Object[] mod : mods) {
-                    Class modClass = (Class) mod[0];
+                    Class<?> modClass = (Class<?>) mod[0];
                     String initializerType = (String) mod[1];
                     Object modInstance = null;
 
                     try {
                         writer.println("Instancing " + modClass.getName() + " as " + initializerType);
                         writer.flush();
-                        modInstance = modClass.newInstance();
+                        // Используем современный подход вместо устаревшего newInstance()
+                        Constructor<?> constructor = modClass.getDeclaredConstructor();
+                        constructor.setAccessible(true);
+                        modInstance = constructor.newInstance();
                         writer.println("Instanced");
                         writer.flush();
                     }

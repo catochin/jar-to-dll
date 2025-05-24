@@ -64,8 +64,6 @@ public class HeaderConverter {
                     case CONSTANT_Utf8:
                         this.cpStrings[i] = this.decodeString(buf);
                         break;
-                    default:
-                        throw new RuntimeException("Failed to read constant pool because of type " + tag);
                     case CONSTANT_Integer:
                         buf.getInt();
                         break;
@@ -102,6 +100,8 @@ public class HeaderConverter {
                         buf.getChar();
                         buf.getChar();
                         break;
+                    default:
+                        throw new RuntimeException("Failed to read constant pool because of type " + tag);
                 }
             }
 
