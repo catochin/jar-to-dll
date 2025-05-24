@@ -8,7 +8,7 @@ build-header-converter:
 	@javac --release 17 header-converter-src/HeaderConverter.java
 convert-injector: build-injector build-header-converter
 	@echo "Converting injector class to .h"
-	@java --add-opens java.base/java.lang=ALL-UNNAMED -cp header-converter-src HeaderConverter injector injector-src/ForgeInjector.class native-src/classes/injector.h
+	@java --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.security=ALL-UNNAMED -cp header-converter-src HeaderConverter injector injector-src/*.class native-src/classes/injector.h
 convert-jar: build-header-converter
 	@echo "Converting input jar to .h"
 	@java --add-opens java.base/java.lang=ALL-UNNAMED -cp header-converter-src HeaderConverter input-jar input.jar native-src/classes/jar.h

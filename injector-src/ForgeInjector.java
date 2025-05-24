@@ -92,39 +92,59 @@ public class ForgeInjector extends Thread {
                 DefineClassInvoker defineClassInvoker = null;
                 
                 try {
-                    // Пытаемся использовать стандартный способ для Java 17+
-                    Method loadMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, Integer.TYPE, Integer.TYPE, ProtectionDomain.class);
-                    loadMethod.setAccessible(true);
-                    writer.println("Using standard defineClass method");
+                    // Новый подход: используем MethodHandles.Lookup.defineClass (Java 9+)
+                    MethodHandles.Lookup lookup = MethodHandles.lookup();
+                    MethodHandle defineClassHandle = lookup.findVirtual(MethodHandles.Lookup.class, "defineClass", 
+                        MethodType.methodType(Class.class, byte[].class));
+                    writer.println("Using MethodHandles.Lookup.defineClass method");
                     
                     defineClassInvoker = (classLoader, name, bytecode, offset, length, pd) -> {
                         try {
-                            return (Class<?>) loadMethod.invoke(classLoader, name, bytecode, offset, length, pd);
+                            // Создаем новый lookup для target ClassLoader
+                            MethodHandles.Lookup targetLookup = MethodHandles.privateLookupIn(classLoader.getClass(), lookup);
+                            return (Class<?>) defineClassHandle.invoke(targetLookup, bytecode);
                         } catch (Throwable t) {
-                            throw new Exception("Failed to invoke defineClass via reflection", t);
+                            throw new Exception("Failed to invoke defineClass via MethodHandles.Lookup", t);
                         }
                     };
                     
                 } catch (Exception e) {
-                    writer.println("Standard defineClass failed: " + e.getMessage());
+                    writer.println("MethodHandles.Lookup approach failed: " + e.getMessage());
                     try {
-                        // Альтернативный способ через MethodHandles для Java 17+
-                        MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(ClassLoader.class, MethodHandles.lookup());
-                        MethodHandle methodHandle = lookup.findVirtual(ClassLoader.class, "defineClass", 
-                            MethodType.methodType(Class.class, String.class, byte[].class, int.class, int.class, ProtectionDomain.class));
-                        writer.println("Using MethodHandles for defineClass");
+                        // Fallback: пытаемся использовать стандартный способ с принудительным доступом
+                        Method loadMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, Integer.TYPE, Integer.TYPE, ProtectionDomain.class);
+                        loadMethod.setAccessible(true);
+                        writer.println("Using standard defineClass method with forced access");
                         
                         defineClassInvoker = (classLoader, name, bytecode, offset, length, pd) -> {
                             try {
-                                return (Class<?>) methodHandle.invoke(classLoader, name, bytecode, offset, length, pd);
+                                return (Class<?>) loadMethod.invoke(classLoader, name, bytecode, offset, length, pd);
                             } catch (Throwable t) {
-                                throw new Exception("Failed to invoke defineClass via MethodHandle", t);
+                                throw new Exception("Failed to invoke defineClass via reflection", t);
                             }
                         };
                         
                     } catch (Exception e2) {
-                        writer.println("MethodHandles approach also failed: " + e2.getMessage());
-                        throw new Exception("Cannot access defineClass method in Java " + System.getProperty("java.version"), e2);
+                        writer.println("Standard defineClass failed: " + e2.getMessage());
+                        try {
+                            // Последний fallback: MethodHandles с приватным доступом
+                            MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(ClassLoader.class, MethodHandles.lookup());
+                            MethodHandle methodHandle = lookup.findVirtual(ClassLoader.class, "defineClass", 
+                                MethodType.methodType(Class.class, String.class, byte[].class, int.class, int.class, ProtectionDomain.class));
+                            writer.println("Using MethodHandles for defineClass");
+                            
+                            defineClassInvoker = (classLoader, name, bytecode, offset, length, pd) -> {
+                                try {
+                                    return (Class<?>) methodHandle.invoke(classLoader, name, bytecode, offset, length, pd);
+                                } catch (Throwable t) {
+                                    throw new Exception("Failed to invoke defineClass via MethodHandle", t);
+                                }
+                            };
+                            
+                        } catch (Exception e3) {
+                            writer.println("MethodHandles approach also failed: " + e3.getMessage());
+                            throw new Exception("Cannot access defineClass method in Java " + System.getProperty("java.version"), e3);
+                        }
                     }
                 }
                 
