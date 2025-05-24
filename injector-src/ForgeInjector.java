@@ -27,7 +27,7 @@ public class ForgeInjector extends Thread {
     private static Map<String, Object[]> globalHooks = new ConcurrentHashMap<>();
     private static boolean globalInterceptorInitialized = false;
     
-    // Простые массивы для хранения данных перехватчиков (без inner classes)
+    // Простые массивы для хранения данных перехватчиков
     private static Map<String, Object[]> runtimeHandlers = new ConcurrentHashMap<>();
     private static Map<String, Object[]> staticInterceptors = new ConcurrentHashMap<>();
     
@@ -378,7 +378,7 @@ public class ForgeInjector extends Thread {
                     Object[] hookData = new Object[]{mixinInstance, mixinMethod, "inject", foundMethod};
                     injectHooks.computeIfAbsent(hookKey, k -> new ArrayList<>()).add(hookData);
                     
-                    // Простая регистрация хука без inner classes
+                    // Простая регистрация хука
                     registerSimpleHook(writer, foundMethod, mixinMethod, mixinInstance);
                     
                     writer.println("              ✓ ADVANCED Hook installed: " + hookKey);
@@ -644,6 +644,12 @@ public class ForgeInjector extends Thread {
     public static void testAllMixins() {
         try {
             System.out.println("=== TESTING ALL MIXINS ===");
+            
+            // Показываем все доступные хуки
+            System.out.println("Available hooks:");
+            for (String key : globalHooks.keySet()) {
+                System.out.println("  - " + key);
+            }
             
             // Тест клавиатуры
             triggerKeyboardMixin(0L, 256, 0, 1, 0); // ESC key press
