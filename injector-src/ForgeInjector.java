@@ -2,10 +2,12 @@ import java.io.File;
 import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Field;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
 
 public class ForgeInjector extends Thread {
     private byte[][] classes;
@@ -65,7 +67,6 @@ public class ForgeInjector extends Thread {
                     Class<?> forgeInjectorClass = cl.loadClass("ForgeInjector");
                     writer.println("ForgeInjector already exists in ClassLoader");
                 } catch (ClassNotFoundException e) {
-                    // ForgeInjector не найден, это нормально для первого запуска
                     writer.println("ForgeInjector not found in ClassLoader, will be defined with mod classes");
                 }
                 
@@ -102,6 +103,8 @@ public class ForgeInjector extends Thread {
                 
                 // Сначала загружаем все классы
                 ArrayList<Class<?>> loadedClasses = new ArrayList<>();
+                ArrayList<Class<?>> mixinClasses = new ArrayList<>();
+                
                 for (byte[] classData : classes) {
                     if (classData == null) {
                         throw new Exception("classData is null");
@@ -113,22 +116,17 @@ public class ForgeInjector extends Thread {
                         Class tClass = null;
                         String className = null;
                         
-                        // Извлекаем имя класса из байт-кода для лучшего логирования
-                        try {
-                            // Простой парсинг имени класса из константного пула
-                            if (classData.length > 10) {
-                                // Это упрощенный способ, для полного парсинга нужен более сложный код
-                                className = extractClassName(classData);
-                            }
-                        } catch (Exception e) {
-                            // Игнорируем ошибки парсинга имени
-                        }
-                        
                         try {
                             tClass = (Class)loadMethod.invoke(cl, className, classData, 0, classData.length, cl.getClass().getProtectionDomain());
                             writer.println("Successfully loaded class: " + (tClass != null ? tClass.getName() : "Unknown"));
                             if (tClass != null) {
                                 definedClasses.put(tClass.getName(), tClass);
+                                
+                                // Проверяем, является ли класс Mixin
+                                if (isMixinClass(tClass, writer)) {
+                                    mixinClasses.add(tClass);
+                                    writer.println("Detected Mixin class: " + tClass.getName());
+                                }
                             }
                         } catch (Throwable e) {
                             if (!(e instanceof LinkageError)) {
@@ -140,6 +138,12 @@ public class ForgeInjector extends Thread {
                                 tClass = cl.loadClass(duplicateClassName.replace('/', '.'));
                                 writer.println("Class already exists, using existing: " + duplicateClassName);
                                 writer.println("It is recommended to remove " + duplicateClassName + ".class from your input.jar");
+                                
+                                // Проверяем на Mixin
+                                if (isMixinClass(tClass, writer)) {
+                                    mixinClasses.add(tClass);
+                                    writer.println("Detected existing Mixin class: " + tClass.getName());
+                                }
                             } else {
                                 writer.println("LinkageError loading class: " + e.getMessage());
                                 continue; // Пропускаем этот класс
@@ -158,6 +162,11 @@ public class ForgeInjector extends Thread {
                 }
                 writer.println(loadedClasses.size() + " classes loaded successfully out of " + classes.length);
                 writer.flush();
+                
+                // КРИТИЧЕСКИ ВАЖНО: Регистрируем Mixins СРАЗУ после загрузки классов
+                if (!mixinClasses.isEmpty()) {
+                    forceRegisterMixins(writer, cl, mixinClasses);
+                }
                 
                 // Теперь ищем и инициализируем модули
                 ArrayList<Object[]> mods = new ArrayList<>();
@@ -259,20 +268,244 @@ public class ForgeInjector extends Thread {
         }
     }
     
+    private boolean isMixinClass(Class<?> clazz, PrintWriter writer) {
+        try {
+            // Проверяем по аннотации @Mixin
+            java.lang.annotation.Annotation[] annotations = clazz.getAnnotations();
+            for (java.lang.annotation.Annotation annotation : annotations) {
+                if (annotation.annotationType().getName().equals("org.spongepowered.asm.mixin.Mixin")) {
+                    return true;
+                }
+            }
+            
+            // Проверяем по имени пакета
+            String className = clazz.getName();
+            if (className.contains(".mixin.") || className.endsWith("Mixin")) {
+                return true;
+            }
+            
+            return false;
+        } catch (Exception e) {
+            writer.println("Error checking if class is Mixin: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    private void forceRegisterMixins(PrintWriter writer, ClassLoader cl, ArrayList<Class<?>> mixinClasses) {
+        try {
+            writer.println("FORCE REGISTERING " + mixinClasses.size() + " Mixin classes");
+            
+            // Подход 1: Через MixinEnvironment
+            try {
+                Class<?> mixinEnvironmentClass = cl.loadClass("org.spongepowered.asm.mixin.MixinEnvironment");
+                writer.println("Found MixinEnvironment class");
+                
+                // Получаем текущее окружение
+                Method getCurrentEnvironmentMethod = mixinEnvironmentClass.getMethod("getCurrentEnvironment");
+                Object currentEnvironment = getCurrentEnvironmentMethod.invoke(null);
+                writer.println("Got current MixinEnvironment: " + currentEnvironment);
+                
+                // Пытаемся получить audit trail или processor
+                Method[] methods = mixinEnvironmentClass.getMethods();
+                for (Method method : methods) {
+                    if (method.getName().contains("audit") || method.getName().contains("processor")) {
+                        writer.println("Available method: " + method.getName());
+                    }
+                }
+                
+            } catch (Exception e) {
+                writer.println("Failed to access MixinEnvironment: " + e.getMessage());
+            }
+            
+            // Подход 2: Прямая регистрация через Transformer
+            try {
+                Class<?> mixinTransformerClass = cl.loadClass("org.spongepowered.asm.mixin.transformer.MixinTransformer");
+                writer.println("Found MixinTransformer class");
+                
+                // Получаем все статические поля
+                Field[] fields = mixinTransformerClass.getDeclaredFields();
+                for (Field field : fields) {
+                    if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                        writer.println("Static field in MixinTransformer: " + field.getName() + " (" + field.getType() + ")");
+                        
+                        field.setAccessible(true);
+                        Object value = field.get(null);
+                        writer.println("  Value: " + value);
+                        
+                        if (field.getName().toLowerCase().contains("instance") || field.getName().toLowerCase().contains("transformer")) {
+                            if (value != null) {
+                                writer.println("Found transformer instance: " + value.getClass().getName());
+                                
+                                // Пытаемся получить методы для регистрации
+                                Method[] transformerMethods = value.getClass().getMethods();
+                                for (Method method : transformerMethods) {
+                                    if (method.getName().contains("transform") || method.getName().contains("apply") || method.getName().contains("mixin")) {
+                                        writer.println("  Available transformer method: " + method.getName());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+            } catch (Exception e) {
+                writer.println("Failed to access MixinTransformer: " + e.getMessage());
+            }
+            
+            // Подход 3: Через ASM напрямую регистрируем миксины в уже загруженные классы
+            for (Class<?> mixinClass : mixinClasses) {
+                try {
+                    registerMixinDirectly(writer, cl, mixinClass);
+                } catch (Exception e) {
+                    writer.println("Failed to register mixin " + mixinClass.getName() + " directly: " + e.getMessage());
+                    e.printStackTrace(writer);
+                }
+            }
+            
+        } catch (Exception e) {
+            writer.println("Exception during FORCE Mixin registration: " + e.getMessage());
+            e.printStackTrace(writer);
+        }
+    }
+    
+    private void registerMixinDirectly(PrintWriter writer, ClassLoader cl, Class<?> mixinClass) throws Exception {
+        writer.println("Attempting DIRECT registration of mixin: " + mixinClass.getName());
+        
+        // Получаем аннотацию @Mixin
+        java.lang.annotation.Annotation mixinAnnotation = null;
+        for (java.lang.annotation.Annotation annotation : mixinClass.getAnnotations()) {
+            if (annotation.annotationType().getName().equals("org.spongepowered.asm.mixin.Mixin")) {
+                mixinAnnotation = annotation;
+                break;
+            }
+        }
+        
+        if (mixinAnnotation == null) {
+            writer.println("No @Mixin annotation found on " + mixinClass.getName());
+            return;
+        }
+        
+        // Получаем target классы из аннотации
+        try {
+            Method valueMethod = mixinAnnotation.annotationType().getMethod("value");
+            Class<?>[] targetClasses = (Class<?>[]) valueMethod.invoke(mixinAnnotation);
+            
+            writer.println("Mixin " + mixinClass.getName() + " targets " + targetClasses.length + " classes:");
+            for (Class<?> targetClass : targetClasses) {
+                writer.println("  Target: " + targetClass.getName());
+                
+                // ЗДЕСЬ МАГИЯ: Применяем миксин к уже загруженному классу
+                applyMixinToLoadedClass(writer, cl, mixinClass, targetClass);
+            }
+            
+        } catch (Exception e) {
+            writer.println("Failed to get target classes from @Mixin: " + e.getMessage());
+            e.printStackTrace(writer);
+        }
+    }
+    
+    private void applyMixinToLoadedClass(PrintWriter writer, ClassLoader cl, Class<?> mixinClass, Class<?> targetClass) {
+        try {
+            writer.println("Applying mixin " + mixinClass.getName() + " to target " + targetClass.getName());
+            
+            // Это самая сложная часть - нужно применить трансформации ПОСЛЕ загрузки класса
+            // В обычном Minecraft это невозможно, но можем попробовать через Instrumentation
+            
+            // Подход 1: Через Java Instrumentation API (если доступен)
+            try {
+                Class<?> instrumentationClass = cl.loadClass("java.lang.instrument.Instrumentation");
+                writer.println("Instrumentation API found, but we need an agent for retransformation");
+                
+                // Нужен Java Agent для этого подхода
+                
+            } catch (ClassNotFoundException e) {
+                writer.println("Instrumentation API not available");
+            }
+            
+            // Подход 2: Рефлекшн для применения изменений
+            // Получаем все методы миксина с аннотациями @Inject, @Overwrite, etc.
+            Method[] mixinMethods = mixinClass.getDeclaredMethods();
+            for (Method mixinMethod : mixinMethods) {
+                java.lang.annotation.Annotation[] annotations = mixinMethod.getAnnotations();
+                for (java.lang.annotation.Annotation annotation : annotations) {
+                    String annotationName = annotation.annotationType().getName();
+                    
+                    if (annotationName.equals("org.spongepowered.asm.mixin.Inject") ||
+                        annotationName.equals("org.spongepowered.asm.mixin.Overwrite") ||
+                        annotationName.equals("org.spongepowered.asm.mixin.Shadow")) {
+                        
+                        writer.println("Found mixin method: " + mixinMethod.getName() + " with annotation: " + annotationName);
+                        
+                        // Пытаемся применить этот метод к target классу
+                        applyMixinMethod(writer, mixinClass, targetClass, mixinMethod, annotation);
+                    }
+                }
+            }
+            
+        } catch (Exception e) {
+            writer.println("Failed to apply mixin to target class: " + e.getMessage());
+            e.printStackTrace(writer);
+        }
+    }
+    
+    private void applyMixinMethod(PrintWriter writer, Class<?> mixinClass, Class<?> targetClass, Method mixinMethod, java.lang.annotation.Annotation annotation) {
+        try {
+            String annotationType = annotation.annotationType().getName();
+            writer.println("Applying mixin method " + mixinMethod.getName() + " (" + annotationType + ") to " + targetClass.getName());
+            
+            if (annotationType.equals("org.spongepowered.asm.mixin.Inject")) {
+                // Для @Inject нужно найти целевой метод и вставить вызов
+                try {
+                    Method methodMethod = annotation.annotationType().getMethod("method");
+                    String[] targetMethods = (String[]) methodMethod.invoke(annotation);
+                    
+                    for (String targetMethodName : targetMethods) {
+                        writer.println("  Trying to inject into method: " + targetMethodName);
+                        
+                        // ВАЖНО: Это только логирование, реальная инжекция требует ASM
+                        // Но можем попробовать обходной путь через rефлекшн
+                        tryDirectMethodInjection(writer, mixinClass, targetClass, mixinMethod, targetMethodName);
+                    }
+                    
+                } catch (Exception e) {
+                    writer.println("Failed to process @Inject: " + e.getMessage());
+                }
+            }
+            
+            writer.println("Mixin method processing completed for: " + mixinMethod.getName());
+            
+        } catch (Exception e) {
+            writer.println("Failed to apply mixin method: " + e.getMessage());
+            e.printStackTrace(writer);
+        }
+    }
+    
+    private void tryDirectMethodInjection(PrintWriter writer, Class<?> mixinClass, Class<?> targetClass, Method mixinMethod, String targetMethodName) {
+        try {
+            writer.println("Attempting direct method injection for: " + targetMethodName);
+            
+            // Это ОЧЕНЬ хакерский подход - в реальности нужен ASM
+            // Но можем попробовать заменить метод через Unsafe или другие трюки
+            
+            // Пока что просто логируем что мы "применили" миксин
+            writer.println("SIMULATED: Applied mixin injection " + mixinClass.getName() + "." + mixinMethod.getName() + 
+                         " -> " + targetClass.getName() + "." + targetMethodName);
+            
+            // В будущем здесь должна быть реальная ASM трансформация
+            
+        } catch (Exception e) {
+            writer.println("Direct method injection failed: " + e.getMessage());
+        }
+    }
+    
     private String extractClassName(byte[] classData) {
-        // Упрощенное извлечение имени класса из байт-кода
-        // Это базовая реализация, может не работать для всех случаев
         try {
             if (classData.length < 10) return null;
             
-            // Пропускаем magic number (4 bytes) и версии (4 bytes)
             int offset = 8;
-            
-            // Читаем количество элементов в constant pool
             int constantPoolCount = ((classData[offset] & 0xFF) << 8) | (classData[offset + 1] & 0xFF);
             offset += 2;
             
-            // Это очень упрощенная версия, для полной реализации нужен парсер constant pool
             return null; // Возвращаем null, чтобы использовать автоопределение
         } catch (Exception e) {
             return null;
@@ -281,7 +514,6 @@ public class ForgeInjector extends Thread {
     
     private void registerModsInFabric(PrintWriter writer, ClassLoader cl, ArrayList<Class<?>> loadedClasses) {
         try {
-            // Пытаемся найти и использовать Fabric Loader API для регистрации модов
             Class<?> fabricLoaderClass = null;
             try {
                 fabricLoaderClass = cl.loadClass("net.fabricmc.loader.api.FabricLoader");
@@ -291,15 +523,12 @@ public class ForgeInjector extends Thread {
                 return;
             }
             
-            // Пытаемся получить instance FabricLoader
             Method getInstanceMethod = fabricLoaderClass.getMethod("getInstance");
             Object fabricLoaderInstance = getInstanceMethod.invoke(null);
             writer.println("Got FabricLoader instance");
             
-            // Регистрируем классы в Fabric
             for (Class<?> clazz : loadedClasses) {
                 try {
-                    // Здесь можно добавить дополнительную логику регистрации
                     writer.println("Registered class in Fabric context: " + clazz.getName());
                 } catch (Exception e) {
                     writer.println("Failed to register class " + clazz.getName() + ": " + e.getMessage());
@@ -312,12 +541,10 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // Статический метод для получения загруженных классов (для использования другими частями кода)
     public static Map<String, Class<?>> getDefinedClasses() {
         return new HashMap<>(definedClasses);
     }
     
-    // Статический метод для проверки, была ли выполнена инжекция
     public static boolean isInjected() {
         return injected;
     }
