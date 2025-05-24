@@ -62,17 +62,32 @@ static void GetJNIEnv(JavaVM* jvm, JNIEnv*& jni_env) {
 }
 
 static jclass DefineOrGetInjector(JNIEnv* jni_env) {
+  // Сначала пытаемся найти уже существующий класс
   const auto existing_injector_class = jni_env->FindClass(INJECTOR_CLASS_NAME);
-  if (existing_injector_class) {
+  if (existing_injector_class && !jni_env->ExceptionCheck()) {
     ShowMessage(L"Injector class is already presented in jvm, using it");
     return existing_injector_class;
   }
+  
+  // Очищаем исключение если класс не найден
+  if (jni_env->ExceptionCheck()) {
+    jni_env->ExceptionClear();
+  }
+  
+  // Определяем новый класс
   const auto injector_class = jni_env->DefineClass(
-      nullptr, nullptr, injector_class_data, sizeof(injector_class_data));
+      INJECTOR_CLASS_NAME, nullptr, injector_class_data, sizeof(injector_class_data));
   if (!injector_class) {
     Error(L"Failed to define injector class");
   }
-  return injector_class;
+  
+  // Делаем класс глобально доступным
+  const auto global_injector_class = (jclass)jni_env->NewGlobalRef(injector_class);
+  if (!global_injector_class) {
+    Error(L"Failed to create global reference for injector class");
+  }
+  
+  return global_injector_class;
 }
 
 static jobjectArray GetJarClassesArray(JNIEnv* jni_env) {
@@ -111,7 +126,15 @@ static void CallInjector(JNIEnv* jni_env, jclass injector_class,
 
   jni_env->CallStaticVoidMethod(
       injector_class, inject_method_id, jar_classes_array);
-  ShowMessage(L"Native part ready, now java part is injecting");
+  
+  // Проверяем на исключения после вызова
+  if (jni_env->ExceptionCheck()) {
+    ShowMessage(L"Exception occurred during injection");
+    jni_env->ExceptionDescribe();
+    jni_env->ExceptionClear();
+  } else {
+    ShowMessage(L"Native part ready, now java part is injecting");
+  }
 }
 
 void RunInjector() {
@@ -127,5 +150,8 @@ void RunInjector() {
 
   CallInjector(jni_env, injector_class, jar_classes_array);
 
+  // Не выгружаем DLL сразу, дайте время для инжекции
+  Sleep(1000);
+  
   FreeLibraryAndExitThread(::global_dll_instance, 0);
 }

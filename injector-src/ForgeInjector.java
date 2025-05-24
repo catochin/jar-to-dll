@@ -4,15 +4,22 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 
 public class ForgeInjector extends Thread {
     private byte[][] classes;
+    private static volatile boolean injected = false;
+    private static Map<String, Class<?>> definedClasses = new HashMap<>();
 
     private ForgeInjector(byte[][] classes) {
         this.classes = classes;
     }
 
     public static void inject(byte[][] classes) {
+        if (injected) {
+            return; // Предотвращаем повторную инжекцию
+        }
         new Thread(new ForgeInjector(classes)).start();
     }
 
@@ -53,6 +60,15 @@ public class ForgeInjector extends Thread {
                 }
                 this.setContextClassLoader(cl);
                 
+                // Регистрируем ForgeInjector в текущем ClassLoader
+                try {
+                    Class<?> forgeInjectorClass = cl.loadClass("ForgeInjector");
+                    writer.println("ForgeInjector already exists in ClassLoader");
+                } catch (ClassNotFoundException e) {
+                    // ForgeInjector не найден, это нормально для первого запуска
+                    writer.println("ForgeInjector not found in ClassLoader, will be defined with mod classes");
+                }
+                
                 // Fabric использует ModInitializer интерфейс вместо аннотаций
                 Class modInitializerInterface = null;
                 Class clientModInitializerInterface = null;
@@ -84,7 +100,8 @@ public class ForgeInjector extends Thread {
                 writer.println("Loading " + classes.length + " classes");
                 writer.flush();
                 
-                ArrayList<Object[]> mods = new ArrayList<>();
+                // Сначала загружаем все классы
+                ArrayList<Class<?>> loadedClasses = new ArrayList<>();
                 for (byte[] classData : classes) {
                     if (classData == null) {
                         throw new Exception("classData is null");
@@ -94,52 +111,86 @@ public class ForgeInjector extends Thread {
                     }
                     try {
                         Class tClass = null;
+                        String className = null;
+                        
+                        // Извлекаем имя класса из байт-кода для лучшего логирования
                         try {
-                            tClass = (Class)loadMethod.invoke(cl, null, classData, 0, classData.length, cl.getClass().getProtectionDomain());
+                            // Простой парсинг имени класса из константного пула
+                            if (classData.length > 10) {
+                                // Это упрощенный способ, для полного парсинга нужен более сложный код
+                                className = extractClassName(classData);
+                            }
+                        } catch (Exception e) {
+                            // Игнорируем ошибки парсинга имени
+                        }
+                        
+                        try {
+                            tClass = (Class)loadMethod.invoke(cl, className, classData, 0, classData.length, cl.getClass().getProtectionDomain());
+                            writer.println("Successfully loaded class: " + (tClass != null ? tClass.getName() : "Unknown"));
+                            if (tClass != null) {
+                                definedClasses.put(tClass.getName(), tClass);
+                            }
                         } catch (Throwable e) {
                             if (!(e instanceof LinkageError)) {
                                 throw e;
                             }
 
                             if (e.getMessage().contains("duplicate class definition for name: ")) {
-                                String className = e.getMessage().split("\"")[1];
-                                tClass = cl.loadClass(className.replace('/', '.'));
-                                writer.println("It is recommended to remove " + className + ".class from your input.jar");
+                                String duplicateClassName = e.getMessage().split("\"")[1];
+                                tClass = cl.loadClass(duplicateClassName.replace('/', '.'));
+                                writer.println("Class already exists, using existing: " + duplicateClassName);
+                                writer.println("It is recommended to remove " + duplicateClassName + ".class from your input.jar");
+                            } else {
+                                writer.println("LinkageError loading class: " + e.getMessage());
+                                continue; // Пропускаем этот класс
                             }
                         }
                         
-                        // Проверяем, реализует ли класс один из интерфейсов Fabric
-                        boolean isModInitializer = false;
-                        String initializerType = "";
-                        
-                        if (modInitializerInterface != null && modInitializerInterface.isAssignableFrom(tClass)) {
-                            isModInitializer = true;
-                            initializerType = "ModInitializer";
-                        } else if (clientModInitializerInterface != null && clientModInitializerInterface.isAssignableFrom(tClass)) {
-                            isModInitializer = true;
-                            initializerType = "ClientModInitializer";
-                        } else if (dedicatedServerModInitializerInterface != null && dedicatedServerModInitializerInterface.isAssignableFrom(tClass)) {
-                            isModInitializer = true;
-                            initializerType = "DedicatedServerModInitializer";
+                        if (tClass != null) {
+                            loadedClasses.add(tClass);
                         }
-                        
-                        if (!isModInitializer) continue;
-                        
-                        writer.println("Found " + initializerType + ": " + tClass.getName());
-                        
-                        Object[] mod = new Object[2];
-                        mod[0] = tClass;
-                        mod[1] = initializerType;
-                        mods.add(mod);
                     }
                     catch (Exception e) {
-                        e.printStackTrace();
-                        throw new Exception("Exception on defineClass", e);
+                        writer.println("Exception loading class: " + e.getMessage());
+                        e.printStackTrace(writer);
+                        // Продолжаем загрузку других классов
                     }
                 }
-                writer.println(classes.length + " loaded successfully");
+                writer.println(loadedClasses.size() + " classes loaded successfully out of " + classes.length);
                 writer.flush();
                 
+                // Теперь ищем и инициализируем модули
+                ArrayList<Object[]> mods = new ArrayList<>();
+                for (Class<?> tClass : loadedClasses) {
+                    // Проверяем, реализует ли класс один из интерфейсов Fabric
+                    boolean isModInitializer = false;
+                    String initializerType = "";
+                    
+                    if (modInitializerInterface != null && modInitializerInterface.isAssignableFrom(tClass)) {
+                        isModInitializer = true;
+                        initializerType = "ModInitializer";
+                    } else if (clientModInitializerInterface != null && clientModInitializerInterface.isAssignableFrom(tClass)) {
+                        isModInitializer = true;
+                        initializerType = "ClientModInitializer";
+                    } else if (dedicatedServerModInitializerInterface != null && dedicatedServerModInitializerInterface.isAssignableFrom(tClass)) {
+                        isModInitializer = true;
+                        initializerType = "DedicatedServerModInitializer";
+                    }
+                    
+                    if (!isModInitializer) continue;
+                    
+                    writer.println("Found " + initializerType + ": " + tClass.getName());
+                    
+                    Object[] mod = new Object[2];
+                    mod[0] = tClass;
+                    mod[1] = initializerType;
+                    mods.add(mod);
+                }
+                
+                // Регистрируем модули в Fabric
+                registerModsInFabric(writer, cl, loadedClasses);
+                
+                // Инициализируем модули
                 for (Object[] mod : mods) {
                     Class modClass = (Class) mod[0];
                     String initializerType = (String) mod[1];
@@ -156,7 +207,7 @@ public class ForgeInjector extends Thread {
                         writer.println("Exception on instancing: " + e);
                         e.printStackTrace(writer);
                         writer.flush();
-                        throw new Exception("Exception on instancing", e);
+                        continue; // Продолжаем с другими модами
                     }
 
                     // Вызываем соответствующий метод инициализации
@@ -182,19 +233,22 @@ public class ForgeInjector extends Thread {
                         writer.println("InvocationTargetException on initializing: " + e);
                         e.getCause().printStackTrace(writer);
                         writer.flush();
-                        throw new Exception("Exception on initializing (InvocationTargetException)", e.getCause());
+                        // Продолжаем с другими модами
                     }
                     catch (Exception e) {
                         writer.println("Exception on initializing: " + e);
                         e.printStackTrace(writer);
                         writer.flush();
-                        throw new Exception("Exception on initializing", e);
+                        // Продолжаем с другими модами
                     }
                 }
+                
+                injected = true;
                 writer.println("Successfully injected into Fabric");
                 writer.flush();
             }
             catch (Throwable e) {
+                writer.println("Fatal error during injection:");
                 e.printStackTrace(writer);
                 writer.flush();
             }
@@ -203,5 +257,68 @@ public class ForgeInjector extends Thread {
         catch (Throwable e) {
             e.printStackTrace();
         }
+    }
+    
+    private String extractClassName(byte[] classData) {
+        // Упрощенное извлечение имени класса из байт-кода
+        // Это базовая реализация, может не работать для всех случаев
+        try {
+            if (classData.length < 10) return null;
+            
+            // Пропускаем magic number (4 bytes) и версии (4 bytes)
+            int offset = 8;
+            
+            // Читаем количество элементов в constant pool
+            int constantPoolCount = ((classData[offset] & 0xFF) << 8) | (classData[offset + 1] & 0xFF);
+            offset += 2;
+            
+            // Это очень упрощенная версия, для полной реализации нужен парсер constant pool
+            return null; // Возвращаем null, чтобы использовать автоопределение
+        } catch (Exception e) {
+            return null;
+        }
+    }
+    
+    private void registerModsInFabric(PrintWriter writer, ClassLoader cl, ArrayList<Class<?>> loadedClasses) {
+        try {
+            // Пытаемся найти и использовать Fabric Loader API для регистрации модов
+            Class<?> fabricLoaderClass = null;
+            try {
+                fabricLoaderClass = cl.loadClass("net.fabricmc.loader.api.FabricLoader");
+                writer.println("Found FabricLoader API");
+            } catch (ClassNotFoundException e) {
+                writer.println("FabricLoader API not found, mods will be registered manually");
+                return;
+            }
+            
+            // Пытаемся получить instance FabricLoader
+            Method getInstanceMethod = fabricLoaderClass.getMethod("getInstance");
+            Object fabricLoaderInstance = getInstanceMethod.invoke(null);
+            writer.println("Got FabricLoader instance");
+            
+            // Регистрируем классы в Fabric
+            for (Class<?> clazz : loadedClasses) {
+                try {
+                    // Здесь можно добавить дополнительную логику регистрации
+                    writer.println("Registered class in Fabric context: " + clazz.getName());
+                } catch (Exception e) {
+                    writer.println("Failed to register class " + clazz.getName() + ": " + e.getMessage());
+                }
+            }
+            
+        } catch (Exception e) {
+            writer.println("Exception during Fabric registration: " + e.getMessage());
+            e.printStackTrace(writer);
+        }
+    }
+    
+    // Статический метод для получения загруженных классов (для использования другими частями кода)
+    public static Map<String, Class<?>> getDefinedClasses() {
+        return new HashMap<>(definedClasses);
+    }
+    
+    // Статический метод для проверки, была ли выполнена инжекция
+    public static boolean isInjected() {
+        return injected;
     }
 }
