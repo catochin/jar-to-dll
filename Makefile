@@ -2,10 +2,10 @@ all: build
 
 build-injector:
 	@echo "Building injector class"
-	@javac --release 17 --add-opens java.base/java.lang=ALL-UNNAMED injector-src/*.java
+	@javac --release 17 injector-src/*.java
 build-header-converter:
 	@echo "Building class to header converter"
-	@javac --release 17 --add-opens java.base/java.lang=ALL-UNNAMED header-converter-src/HeaderConverter.java
+	@javac --release 17 header-converter-src/HeaderConverter.java
 convert-injector: build-injector build-header-converter
 	@echo "Converting injector class to .h"
 	@java --add-opens java.base/java.lang=ALL-UNNAMED -cp header-converter-src HeaderConverter injector injector-src/*.class native-src/classes/injector.h
