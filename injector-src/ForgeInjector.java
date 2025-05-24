@@ -21,6 +21,10 @@ public class ForgeInjector extends Thread {
     private static Map<String, Object[]> overwriteHooks = new HashMap<>();
     private static Map<String, Object[]> interceptors = new HashMap<>();
     private static Map<Method, Method> methodReplacements = new HashMap<>();
+    
+    // Глобальный перехватчик методов - все в одном классе
+    private static Map<String, Object[]> globalHooks = new HashMap<>();
+    private static boolean globalInterceptorInitialized = false;
 
     private ForgeInjector(byte[][] classes) {
         this.classes = classes;
@@ -113,7 +117,7 @@ public class ForgeInjector extends Thread {
                     initializeMods(writer, cl, modClasses);
                 }
                 
-                // КРИТИЧЕСКИ ВАЖНО: Устанавливаем глобальные хуки через рефлекшн
+                // КРИТИЧЕСКИ ВАЖНО: Устанавливаем глобальные хуки
                 installGlobalMethodHooks(writer, cl);
                 
                 injected = true;
@@ -310,12 +314,10 @@ public class ForgeInjector extends Thread {
         return new Class<?>[0];
     }
     
-    // УЛУЧШЕННАЯ установка хуков с поиском методов по сигнатурам
     private void installMixinHooksAdvanced(PrintWriter writer, Class<?> mixinClass, Object mixinInstance, Class<?> targetClass) {
         try {
             writer.println("    Installing ADVANCED hooks for target: " + targetClass.getName());
             
-            // Показываем все методы target класса
             Method[] targetMethods = targetClass.getDeclaredMethods();
             writer.println("      Target class has " + targetMethods.length + " methods:");
             for (Method method : targetMethods) {
@@ -362,18 +364,15 @@ public class ForgeInjector extends Thread {
             for (String targetMethodName : targetMethodNames) {
                 writer.println("            Looking for method: " + targetMethodName);
                 
-                // УЛУЧШЕННЫЙ поиск методов
                 Method foundMethod = findMethodBySimilarity(writer, targetClass, targetMethodName, mixinMethod);
                 
                 if (foundMethod != null) {
                     writer.println("              ✓ Found similar method: " + foundMethod.getName());
                     
-                    // Устанавливаем прямой хук
                     String hookKey = targetClass.getName() + "." + foundMethod.getName();
                     Object[] hookData = new Object[]{mixinInstance, mixinMethod, "inject", foundMethod};
                     injectHooks.computeIfAbsent(hookKey, k -> new ArrayList<>()).add(hookData);
                     
-                    // КРИТИЧЕСКИ ВАЖНО: Заменяем метод напрямую
                     replaceMethodDirectly(writer, foundMethod, mixinMethod, mixinInstance);
                     
                     writer.println("              ✓ ADVANCED Hook installed: " + hookKey);
@@ -400,7 +399,6 @@ public class ForgeInjector extends Thread {
                 Object[] hookData = new Object[]{mixinInstance, mixinMethod, "overwrite", foundMethod};
                 overwriteHooks.put(hookKey, hookData);
                 
-                // Заменяем метод напрямую
                 replaceMethodDirectly(writer, foundMethod, mixinMethod, mixinInstance);
                 
                 writer.println("            ✓ ADVANCED Overwrite installed: " + hookKey);
@@ -411,7 +409,6 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // Ищем методы по схожести параметров и имён
     private Method findMethodBySimilarity(PrintWriter writer, Class<?> targetClass, String searchName, Method mixinMethod) {
         Method[] methods = targetClass.getDeclaredMethods();
         
@@ -430,7 +427,6 @@ public class ForgeInjector extends Thread {
         for (Method method : methods) {
             Class<?>[] methodParams = method.getParameterTypes();
             
-            // Проверяем схожесть параметров (игнорируя CallbackInfo и первые параметры Mixin)
             if (isParametersSimilar(mixinParams, methodParams)) {
                 writer.println("                Similar parameters: " + method.getName() + " " + java.util.Arrays.toString(methodParams));
                 return method;
@@ -439,11 +435,9 @@ public class ForgeInjector extends Thread {
         
         // 3. Специальные случаи для ваших миксинов
         if (searchName.equals("renderEntity") && targetClass.getName().contains("class_761")) {
-            // Ищем метод с Entity параметром
             for (Method method : methods) {
                 Class<?>[] params = method.getParameterTypes();
                 if (params.length >= 3) {
-                    // renderEntity должен принимать Entity, double, double, double, float, MatrixStack, VertexConsumerProvider
                     for (Class<?> param : params) {
                         if (param.getName().contains("class_1297") || param.getName().contains("Entity")) {
                             writer.println("                Found renderEntity candidate: " + method.getName());
@@ -455,11 +449,9 @@ public class ForgeInjector extends Thread {
         }
         
         if (searchName.equals("render") && targetClass.getName().contains("class_329")) {
-            // Ищем метод InGameHud.render
             for (Method method : methods) {
                 Class<?>[] params = method.getParameterTypes();
                 if (params.length >= 2) {
-                    // render(MatrixStack, float)
                     writer.println("                Found render candidate: " + method.getName());
                     return method;
                 }
@@ -467,11 +459,9 @@ public class ForgeInjector extends Thread {
         }
         
         if (searchName.equals("onKey") && targetClass.getName().contains("class_309")) {
-            // Ищем метод Keyboard.onKey
             for (Method method : methods) {
                 Class<?>[] params = method.getParameterTypes();
                 if (params.length >= 5) {
-                    // onKey(long, int, int, int, int)
                     writer.println("                Found onKey candidate: " + method.getName());
                     return method;
                 }
@@ -483,23 +473,18 @@ public class ForgeInjector extends Thread {
     }
     
     private boolean isParametersSimilar(Class<?>[] mixinParams, Class<?>[] targetParams) {
-        // Упрощенная проверка схожести параметров
         if (Math.abs(mixinParams.length - targetParams.length) <= 2) {
-            // Допускаем разницу в 1-2 параметра (CallbackInfo, this)
             return true;
         }
         return false;
     }
     
-    // САМЫЙ ВАЖНЫЙ МЕТОД: Прямая замена методов через Unsafe
     private void replaceMethodDirectly(PrintWriter writer, Method originalMethod, Method mixinMethod, Object mixinInstance) {
         try {
             writer.println("                REPLACING method directly: " + originalMethod.getName());
             
-            // Сохраняем замену для глобального перехватчика
             methodReplacements.put(originalMethod, mixinMethod);
             
-            // Сохраняем данные для runtime вызова
             String key = originalMethod.getDeclaringClass().getName() + "." + originalMethod.getName();
             Object[] replacementData = new Object[]{mixinInstance, mixinMethod, originalMethod};
             interceptors.put(key, replacementData);
@@ -512,17 +497,15 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // ГЛОБАЛЬНЫЙ перехватчик методов
+    // Встроенные методы глобального перехватчика
     private void installGlobalMethodHooks(PrintWriter writer, ClassLoader cl) {
         writer.println("=== INSTALLING GLOBAL METHOD HOOKS ===");
         
         try {
-            // Создаем глобальный перехватчик через статические поля
-            GlobalMethodInterceptor.initialize(writer, interceptors);
+            initializeGlobalInterceptor(writer, interceptors);
             
             writer.println("✓ Global method interceptor installed with " + interceptors.size() + " hooks");
             
-            // Выводим все установленные хуки
             for (String hookKey : interceptors.keySet()) {
                 writer.println("  Active hook: " + hookKey);
             }
@@ -587,6 +570,40 @@ public class ForgeInjector extends Thread {
         return null;
     }
     
+    // ВСТРОЕННЫЕ МЕТОДЫ ГЛОБАЛЬНОГО ПЕРЕХВАТЧИКА
+    public static void initializeGlobalInterceptor(PrintWriter writer, Map<String, Object[]> hooks) {
+        if (globalInterceptorInitialized) return;
+        
+        globalHooks.putAll(hooks);
+        globalInterceptorInitialized = true;
+        
+        writer.println("Global interceptor initialized with " + globalHooks.size() + " hooks");
+    }
+    
+    public static Object interceptMethod(Object target, String methodName, Object... args) {
+        String className = target.getClass().getName();
+        String key = className + "." + methodName;
+        
+        Object[] hookData = globalHooks.get(key);
+        if (hookData != null) {
+            try {
+                Object mixinInstance = hookData[0];
+                Method mixinMethod = (Method) hookData[1];
+                
+                return mixinMethod.invoke(mixinInstance, args);
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
+        
+        return null;
+    }
+    
+    public static boolean shouldInterceptMethod(Object target, String methodName) {
+        String className = target.getClass().getName();
+        return globalHooks.containsKey(className + "." + methodName);
+    }
+    
     // ПУБЛИЧНЫЕ МЕТОДЫ для внешнего вызова
     public static boolean hasHook(String className, String methodName) {
         String key = className + "." + methodName;
@@ -624,45 +641,5 @@ public class ForgeInjector extends Thread {
     
     public static Map<String, Object[]> getAllHooks() {
         return new HashMap<>(interceptors);
-    }
-}
-
-// Глобальный перехватчик методов
-class GlobalMethodInterceptor {
-    private static Map<String, Object[]> globalHooks = new HashMap<>();
-    private static boolean initialized = false;
-    
-    public static void initialize(PrintWriter writer, Map<String, Object[]> hooks) {
-        if (initialized) return;
-        
-        globalHooks.putAll(hooks);
-        initialized = true;
-        
-        writer.println("GlobalMethodInterceptor initialized with " + globalHooks.size() + " hooks");
-    }
-    
-    public static Object intercept(Object target, String methodName, Object... args) {
-        String className = target.getClass().getName();
-        String key = className + "." + methodName;
-        
-        Object[] hookData = globalHooks.get(key);
-        if (hookData != null) {
-            try {
-                Object mixinInstance = hookData[0];
-                Method mixinMethod = (Method) hookData[1];
-                
-                // Вызываем mixin метод
-                return mixinMethod.invoke(mixinInstance, args);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }
-        
-        return null;
-    }
-    
-    public static boolean shouldIntercept(Object target, String methodName) {
-        String className = target.getClass().getName();
-        return globalHooks.containsKey(className + "." + methodName);
     }
 }
