@@ -5,15 +5,15 @@ import java.lang.reflect.Method;
 import java.security.ProtectionDomain;
 import java.util.ArrayList;
 
-public class FabricInjector extends Thread {
+public class ForgeInjector extends Thread {
     private byte[][] classes;
 
-    private FabricInjector(byte[][] classes) {
+    private ForgeInjector(byte[][] classes) {
         this.classes = classes;
     }
 
     public static void inject(byte[][] classes) {
-        new Thread(new FabricInjector(classes)).start();
+        new Thread(new ForgeInjector(classes)).start();
     }
 
     private static Class tryGetClass(PrintWriter writer, ClassLoader cl, String... names) throws ClassNotFoundException {
