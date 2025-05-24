@@ -1,5 +1,7 @@
 import java.io.File;
 import java.io.PrintWriter;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -32,7 +34,7 @@ public class ForgeInjector extends Thread {
     @Override
     public void run() {
         try (PrintWriter writer = new PrintWriter(System.getProperty("user.home") + File.separator + "jar-to-dll-log.txt", "UTF-8")) {
-            writer.println("Starting Fabric Injection!");
+            writer.println("Starting Fabric Injection (Java " + System.getProperty("java.version") + ")!");
             writer.flush();
             try {
                 ClassLoader cl = null;
@@ -80,8 +82,44 @@ public class ForgeInjector extends Thread {
                     writer.println("DedicatedServerModInitializer interface not found: " + e.getMessage());
                 }
 
-                Method loadMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, Integer.TYPE, Integer.TYPE, ProtectionDomain.class);
-                loadMethod.setAccessible(true);
+                // Java 17 совместимый способ получения defineClass
+                Method loadMethod = null;
+                try {
+                    // Пытаемся использовать стандартный способ для Java 17+
+                    loadMethod = ClassLoader.class.getDeclaredMethod("defineClass", String.class, byte[].class, Integer.TYPE, Integer.TYPE, ProtectionDomain.class);
+                    loadMethod.setAccessible(true);
+                    writer.println("Using standard defineClass method");
+                } catch (Exception e) {
+                    writer.println("Standard defineClass failed: " + e.getMessage());
+                    try {
+                        // Альтернативный способ через MethodHandles для Java 17+
+                        var lookup = MethodHandles.privateLookupIn(ClassLoader.class, MethodHandles.lookup());
+                        var methodHandle = lookup.findVirtual(ClassLoader.class, "defineClass", 
+                            MethodType.methodType(Class.class, String.class, byte[].class, int.class, int.class, ProtectionDomain.class));
+                        writer.println("Using MethodHandles for defineClass");
+                        
+                        // Создаем wrapper метод
+                        loadMethod = new Method() {
+                            @Override
+                            public Object invoke(Object obj, Object... args) throws Throwable {
+                                return methodHandle.invoke(obj, args[0], args[1], args[2], args[3], args[4]);
+                            }
+                            
+                            // Минимальная реализация Method для совместимости
+                            @Override public String getName() { return "defineClass"; }
+                            @Override public Class<?> getReturnType() { return Class.class; }
+                            @Override public Class<?>[] getParameterTypes() { 
+                                return new Class<?>[] {String.class, byte[].class, int.class, int.class, ProtectionDomain.class}; 
+                            }
+                            @Override public Class<?> getDeclaringClass() { return ClassLoader.class; }
+                            @Override public int getModifiers() { return 0; }
+                        };
+                    } catch (Exception e2) {
+                        writer.println("MethodHandles approach also failed: " + e2.getMessage());
+                        throw new Exception("Cannot access defineClass method in Java " + System.getProperty("java.version"), e2);
+                    }
+                }
+                
                 writer.println("Loading " + classes.length + " classes");
                 writer.flush();
                 
@@ -106,7 +144,15 @@ public class ForgeInjector extends Thread {
                                 String className = e.getMessage().split("\"")[1];
                                 tClass = cl.loadClass(className.replace('/', '.'));
                                 writer.println("It is recommended to remove " + className + ".class from your input.jar");
+                            } else {
+                                writer.println("LinkageError occurred: " + e.getMessage());
+                                throw e;
                             }
+                        }
+                        
+                        if (tClass == null) {
+                            writer.println("Warning: tClass is null, skipping");
+                            continue;
                         }
                         
                         // Проверяем, реализует ли класс один из интерфейсов Fabric
@@ -134,11 +180,13 @@ public class ForgeInjector extends Thread {
                         mods.add(mod);
                     }
                     catch (Exception e) {
-                        e.printStackTrace();
+                        writer.println("Exception during class processing: " + e.getMessage());
+                        e.printStackTrace(writer);
+                        writer.flush();
                         throw new Exception("Exception on defineClass", e);
                     }
                 }
-                writer.println(classes.length + " loaded successfully");
+                writer.println(classes.length + " classes processed, " + mods.size() + " mod initializers found");
                 writer.flush();
                 
                 for (Object[] mod : mods) {
@@ -153,11 +201,11 @@ public class ForgeInjector extends Thread {
                         Constructor<?> constructor = modClass.getDeclaredConstructor();
                         constructor.setAccessible(true);
                         modInstance = constructor.newInstance();
-                        writer.println("Instanced");
+                        writer.println("Instanced successfully");
                         writer.flush();
                     }
                     catch (Exception e) {
-                        writer.println("Exception on instancing: " + e);
+                        writer.println("Exception on instancing: " + e.getMessage());
                         e.printStackTrace(writer);
                         writer.flush();
                         throw new Exception("Exception on instancing", e);
@@ -175,36 +223,41 @@ public class ForgeInjector extends Thread {
                         }
                         
                         if (initMethod != null) {
-                            writer.println("Initializing " + initMethod + " for " + initializerType);
+                            writer.println("Initializing " + initMethod.getName() + " for " + initializerType);
                             writer.flush();
                             initMethod.invoke(modInstance);
-                            writer.println("Initialized " + initializerType);
+                            writer.println("Initialized " + initializerType + " successfully");
                             writer.flush();
+                        } else {
+                            writer.println("Warning: No initialization method found for " + initializerType);
                         }
                     }
                     catch (InvocationTargetException e) {
-                        writer.println("InvocationTargetException on initializing: " + e);
-                        e.getCause().printStackTrace(writer);
+                        writer.println("InvocationTargetException on initializing: " + e.getMessage());
+                        if (e.getCause() != null) {
+                            e.getCause().printStackTrace(writer);
+                        }
                         writer.flush();
                         throw new Exception("Exception on initializing (InvocationTargetException)", e.getCause());
                     }
                     catch (Exception e) {
-                        writer.println("Exception on initializing: " + e);
+                        writer.println("Exception on initializing: " + e.getMessage());
                         e.printStackTrace(writer);
                         writer.flush();
                         throw new Exception("Exception on initializing", e);
                     }
                 }
-                writer.println("Successfully injected into Fabric");
+                writer.println("Successfully injected into Fabric!");
                 writer.flush();
             }
             catch (Throwable e) {
+                writer.println("Fatal error during injection: " + e.getMessage());
                 e.printStackTrace(writer);
                 writer.flush();
             }
-            writer.close();
         }
         catch (Throwable e) {
+            System.err.println("Failed to create log file: " + e.getMessage());
             e.printStackTrace();
         }
     }
