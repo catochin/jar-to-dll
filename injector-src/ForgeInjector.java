@@ -98,7 +98,6 @@ public class ForgeInjector extends Thread {
                 writer.println("Found " + mixinClasses.size() + " mixin classes");
                 writer.println("Found " + modClasses.size() + " mod classes");
                 
-                // КРИТИЧЕСКИ ВАЖНО: Применяем миксины с детальным логированием
                 if (!mixinClasses.isEmpty()) {
                     applyDllMixins(writer, cl, mixinClasses);
                 }
@@ -107,7 +106,6 @@ public class ForgeInjector extends Thread {
                     initializeMods(writer, cl, modClasses);
                 }
                 
-                // ДОПОЛНИТЕЛЬНО: Устанавливаем runtime hooks
                 installRuntimeHooks(writer, cl);
                 
                 injected = true;
@@ -191,7 +189,6 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // ИСПРАВЛЕННЫЙ метод применения миксинов
     private void applyDllMixins(PrintWriter writer, ClassLoader cl, ArrayList<Class<?>> mixinClasses) {
         writer.println("=== APPLYING DLL MIXINS ===");
         
@@ -199,12 +196,10 @@ public class ForgeInjector extends Thread {
             try {
                 writer.println("Processing mixin: " + mixinClass.getName());
                 
-                // Создаем instance миксина
                 Object mixinInstance = mixinClass.newInstance();
                 mixinInstances.put(mixinClass.getName(), mixinInstance);
                 writer.println("  Created mixin instance");
                 
-                // ИСПРАВЛЕНО: Получаем target классы с детальным логированием
                 Class<?>[] targets = getMixinTargetsFixed(mixinClass, writer, cl);
                 
                 if (targets.length == 0) {
@@ -224,12 +219,10 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // ИСПРАВЛЕННЫЙ метод получения targets
     private Class<?>[] getMixinTargetsFixed(Class<?> mixinClass, PrintWriter writer, ClassLoader cl) {
         try {
             writer.println("  Analyzing mixin annotations...");
             
-            // Получаем все аннотации
             java.lang.annotation.Annotation[] annotations = mixinClass.getDeclaredAnnotations();
             writer.println("  Found " + annotations.length + " annotations");
             
@@ -241,7 +234,6 @@ public class ForgeInjector extends Thread {
                     writer.println("    Found @Mixin annotation!");
                     
                     try {
-                        // Получаем value() method
                         Method valueMethod = annotation.annotationType().getMethod("value");
                         Object valueResult = valueMethod.invoke(annotation);
                         
@@ -265,7 +257,6 @@ public class ForgeInjector extends Thread {
                 }
             }
             
-            // Fallback: пытаемся определить targets по имени класса
             writer.println("  Fallback: trying to determine targets by class name");
             return guessTargetsByClassName(mixinClass, writer, cl);
             
@@ -277,17 +268,15 @@ public class ForgeInjector extends Thread {
         return new Class<?>[0];
     }
     
-    // Fallback метод для определения targets
     private Class<?>[] guessTargetsByClassName(Class<?> mixinClass, PrintWriter writer, ClassLoader cl) {
         try {
             String mixinName = mixinClass.getSimpleName();
             writer.println("    Guessing targets for: " + mixinName);
             
-            // Маппинг по именам ваших миксинов
             Map<String, String[]> mixinToTargets = new HashMap<>();
-            mixinToTargets.put("RenderMixin", new String[]{"net.minecraft.class_761"}); // EntityRenderer
-            mixinToTargets.put("IngameRenderMixin", new String[]{"net.minecraft.class_329"}); // InGameHud
-            mixinToTargets.put("KeyboardMixin", new String[]{"net.minecraft.class_309"}); // Keyboard
+            mixinToTargets.put("RenderMixin", new String[]{"net.minecraft.class_761"});
+            mixinToTargets.put("IngameRenderMixin", new String[]{"net.minecraft.class_329"});
+            mixinToTargets.put("KeyboardMixin", new String[]{"net.minecraft.class_309"});
             
             String[] targetNames = mixinToTargets.get(mixinName);
             if (targetNames != null) {
@@ -313,7 +302,6 @@ public class ForgeInjector extends Thread {
         return new Class<?>[0];
     }
     
-    // Устанавливаем хуки для миксинов
     private void installMixinHooks(PrintWriter writer, Class<?> mixinClass, Object mixinInstance, Class<?> targetClass) {
         try {
             writer.println("    Installing hooks for target: " + targetClass.getName());
@@ -346,12 +334,10 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // ИСПРАВЛЕННЫЙ метод setup inject hook
     private void setupInjectHookFixed(PrintWriter writer, Class<?> mixinClass, Object mixinInstance, Method mixinMethod, Class<?> targetClass, java.lang.annotation.Annotation injectAnnotation) {
         try {
             writer.println("          Processing @Inject...");
             
-            // Получаем target методы
             Method methodsMethod = injectAnnotation.annotationType().getMethod("method");
             String[] targetMethods = (String[]) methodsMethod.invoke(injectAnnotation);
             
@@ -360,11 +346,9 @@ public class ForgeInjector extends Thread {
             for (String targetMethodName : targetMethods) {
                 writer.println("            Setting up hook: " + mixinMethod.getName() + " -> " + targetClass.getSimpleName() + "." + targetMethodName);
                 
-                // Регистрируем хук
                 String hookKey = targetClass.getName() + "." + targetMethodName;
                 MixinHookRegistry.registerInjectHook(hookKey, mixinInstance, mixinMethod);
                 
-                // ДОПОЛНИТЕЛЬНО: Пытаемся установить прямую замену метода
                 try {
                     installDirectMethodHook(writer, targetClass, targetMethodName, mixinInstance, mixinMethod);
                 } catch (Exception e) {
@@ -395,12 +379,11 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // НОВЫЙ метод: прямая замена методов через рефлекшн
+    // ИСПРАВЛЕНО: используем правильный путь к классу
     private void installDirectMethodHook(PrintWriter writer, Class<?> targetClass, String methodName, Object mixinInstance, Method mixinMethod) {
         try {
             writer.println("              Installing direct method hook...");
             
-            // Находим target метод
             Method[] targetMethods = targetClass.getDeclaredMethods();
             Method targetMethod = null;
             
@@ -414,10 +397,9 @@ public class ForgeInjector extends Thread {
             if (targetMethod != null) {
                 writer.println("                Found target method: " + targetMethod);
                 
-                // Создаем wrapper который будет вызывать mixin
-                MethodInterceptor interceptor = new MethodInterceptor(mixinInstance, mixinMethod, targetMethod);
+                // ИСПРАВЛЕНО: используем полный путь к классу
+                MixinHookRegistry.MethodInterceptor interceptor = new MixinHookRegistry.MethodInterceptor(mixinInstance, mixinMethod, targetMethod);
                 
-                // Сохраняем interceptor для дальнейшего использования
                 String interceptorKey = targetClass.getName() + "." + methodName;
                 MixinHookRegistry.registerInterceptor(interceptorKey, interceptor);
                 
@@ -431,16 +413,13 @@ public class ForgeInjector extends Thread {
         }
     }
     
-    // НОВЫЙ метод: установка runtime hooks
     private void installRuntimeHooks(PrintWriter writer, ClassLoader cl) {
         writer.println("=== INSTALLING RUNTIME HOOKS ===");
         
         try {
-            // Создаем глобальный перехватчик для runtime вызовов
             RuntimeMethodInterceptor.initialize(writer);
             writer.println("✓ Runtime method interceptor initialized");
             
-            // Регистрируем все наши hooks в глобальном перехватчике
             Map<String, MixinHookRegistry.MethodInterceptor> interceptors = MixinHookRegistry.getAllInterceptors();
             
             for (Map.Entry<String, MixinHookRegistry.MethodInterceptor> entry : interceptors.entrySet()) {
@@ -526,7 +505,6 @@ public class ForgeInjector extends Thread {
     }
 }
 
-// РАСШИРЕННЫЙ реестр для mixin hooks
 class MixinHookRegistry {
     private static Map<String, List<MixinHook>> injectHooks = new HashMap<>();
     private static Map<String, MixinHook> overwriteHooks = new HashMap<>();
@@ -587,7 +565,6 @@ class MixinHookRegistry {
         }
         
         public Object intercept(Object target, Object... args) throws Exception {
-            // Вызываем mixin метод
             return mixinMethod.invoke(mixinInstance, args);
         }
         
@@ -597,7 +574,6 @@ class MixinHookRegistry {
     }
 }
 
-// НОВЫЙ класс: Runtime перехватчик методов
 class RuntimeMethodInterceptor {
     private static Map<String, MixinHookRegistry.MethodInterceptor> hooks = new HashMap<>();
     private static boolean initialized = false;
@@ -606,10 +582,6 @@ class RuntimeMethodInterceptor {
         if (initialized) return;
         
         writer.println("Initializing RuntimeMethodInterceptor...");
-        
-        // Здесь можно установить глобальные хуки
-        // В реальности нужен более сложный механизм
-        
         initialized = true;
     }
     
@@ -629,7 +601,7 @@ class RuntimeMethodInterceptor {
             }
         }
         
-        return null; // Fallback to original method
+        return null;
     }
     
     public static boolean hasHook(String className, String methodName) {
