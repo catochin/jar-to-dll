@@ -85,7 +85,7 @@ public class ForgeInjector extends Thread {
                     dedicatedServerModInitializerInterface = tryGetClass(writer, cl, "net.fabricmc.api.DedicatedServerModInitializer");
                     writer.println("Found DedicatedServerModInitializer interface");
                 } catch (Exception e) {
-                    writer.println("DedicatedServerModInitializer interface not found: " + e.getMessage());
+                    writer.println("DedicatedServerModInitializerInterface not found: " + e.getMessage());
                 }
 
                 // Java 17 совместимый способ получения defineClass
@@ -98,7 +98,11 @@ public class ForgeInjector extends Thread {
                     writer.println("Using standard defineClass method");
                     
                     defineClassInvoker = (classLoader, name, bytecode, offset, length, pd) -> {
-                        return (Class<?>) loadMethod.invoke(classLoader, name, bytecode, offset, length, pd);
+                        try {
+                            return (Class<?>) loadMethod.invoke(classLoader, name, bytecode, offset, length, pd);
+                        } catch (Throwable t) {
+                            throw new Exception("Failed to invoke defineClass via reflection", t);
+                        }
                     };
                     
                 } catch (Exception e) {
@@ -111,7 +115,11 @@ public class ForgeInjector extends Thread {
                         writer.println("Using MethodHandles for defineClass");
                         
                         defineClassInvoker = (classLoader, name, bytecode, offset, length, pd) -> {
-                            return (Class<?>) methodHandle.invoke(classLoader, name, bytecode, offset, length, pd);
+                            try {
+                                return (Class<?>) methodHandle.invoke(classLoader, name, bytecode, offset, length, pd);
+                            } catch (Throwable t) {
+                                throw new Exception("Failed to invoke defineClass via MethodHandle", t);
+                            }
                         };
                         
                     } catch (Exception e2) {
